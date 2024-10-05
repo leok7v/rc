@@ -252,10 +252,8 @@ size_t rc_decoder(struct range_coder* rc, struct freq_model* fm,
         assert(i < count);
         data[i++] = (uint8_t)sym;
         if (sym == rc_eom) { break; }
-//      printf("%c\n", 'A' + sym);
         rc_decode(rc, fm, sym, total);
     }
-    printf("\n");
     return i;
 }
 
