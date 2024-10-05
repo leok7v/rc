@@ -44,13 +44,37 @@ static uint8_t read_byte(struct range_coder* rc) {
     return 0;
 }
 
-static struct range_coder coder;
+static struct range_coder  coder;
 static struct range_coder* rc = &coder;
 
-static struct freq_model model;
-static struct freq_model* fm = &model;
+static struct prob_model  model;
+static struct prob_model* pm = &model;
 
 static int rc_test0(void) {
+    rc->write = write_byte;
+    rc->read  = read_byte;
+    static uint8_t input[2];
+    for (int i = 0; i < countof(input); i++) {
+        input[i]  = (uint8_t)i;
+        printf("%c\n", 'A' + input[i]);
+    }
+    {
+        pm_init(pm, 2); // probability model
+        rc_encoder(rc, pm, input, sizeof(input));
+        printf("%d\n", (int)written);
+    }
+    static uint8_t output[countof(input)];
+    {
+        pm_init(pm, 2); // probability model
+        size_t k = rc_decoder(rc, pm, output, sizeof(output), 1); // eom == 1
+        printf("%d from %d\n", k, (int)bytes);
+        assert(k == countof(input));
+    }
+    assert(memcmp(input, output, sizeof(input)) == 0);
+    return memcmp(input, output, sizeof(input));
+}
+
+static int rc_test1(void) {
     rc->write = write_byte;
     rc->read  = read_byte;
     static uint8_t input[1024 + 1];
@@ -58,20 +82,16 @@ static int rc_test0(void) {
         input[i]  = i % 255;
 //      printf("%c\n", 'A' + input[i]);
     }
-    input[countof(input) - 1] = rc_eom;
-    // frequency model:
-    memset(fm->freq, 0, sizeof(fm->freq));
-    for (size_t i = 0; i < countof(input); i++) {
-        fm->freq[input[i]]++;
-    }
-    fm_init(fm);
+    input[countof(input) - 1] = 0xFFu; // EOM end of message
     {
-        rc_encoder(rc, fm, input, sizeof(input));
+        pm_init(pm, 256); // probability model
+        rc_encoder(rc, pm, input, sizeof(input));
         printf("%d\n", (int)written);
     }
     static uint8_t output[countof(input)];
     {
-        size_t k = rc_decoder(rc, fm, output, sizeof(output));
+        pm_init(pm, 256); // probability model
+        size_t k = rc_decoder(rc, pm, output, sizeof(output), 0xFF);
         printf("%d from %d\n", k, (int)bytes);
         assert(k == countof(input));
     }
@@ -81,7 +101,7 @@ static int rc_test0(void) {
 
 static int rc_tests(bool verbose) {
     (void)verbose;
-    return rc_test0(); // || rc_test1() || rc_test2();
+    return rc_test0() || rc_test1(); // || rc_test2();
 }
 
 #endif
