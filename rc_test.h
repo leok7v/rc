@@ -69,9 +69,9 @@ static void shuffle(uint8_t a[], size_t n) {
     }
 }
 
-static uint8_t  data[1024 * 1024 * 1024];
-static size_t   written;
-static size_t   bytes; // read
+static uint8_t data[1024 * 1024 * 1024];
+static size_t  written;
+static size_t  bytes; // read
 
 static void write_byte(struct range_coder* rc, uint8_t b) {
     if (rc->error == 0) {
@@ -122,16 +122,27 @@ static struct range_coder* rc = &coder;
 static struct prob_model  model;
 static struct prob_model* pm = &model;
 
+static int rc_compare(uint8_t input[], uint8_t output[], size_t n) {
+    bool equal = memcmp(input, output, n) == 0;
+    if (!equal) {
+        for (size_t i = 0; i < n; i++) {
+            if (input[i] != output[i]) {
+                printf("[%d]: %d != %d\n", (int)i, input[i], output[i]);
+                break;
+            }
+        }
+    }
+    assert(equal);
+    return equal ? 0 : EINVAL;
+}
+
 static int rc_test0(void) {
     rc->write = write_byte;
     rc->read  = read_byte;
     bytes = 0;
     written = 0;
     static uint8_t input[2];
-    for (int i = 0; i < countof(input); i++) {
-        input[i]  = (uint8_t)i;
-        printf("%c\n", 'A' + input[i]);
-    }
+    for (int i = 0; i < countof(input); i++) { input[i]  = (uint8_t)i; }
     {
         pm_init(pm, 2); // probability model
         rc_encoder(rc, pm, input, sizeof(input));
@@ -145,8 +156,7 @@ static int rc_test0(void) {
         printf("%d from %d\n", k, (int)bytes);
         assert(rc->error == 0 && k == countof(input));
     }
-    assert(memcmp(input, output, sizeof(input)) == 0);
-    return memcmp(input, output, sizeof(input));
+    return rc_compare(input, output, sizeof(input));
 }
 
 static int rc_test1(void) {
@@ -157,7 +167,6 @@ static int rc_test1(void) {
     static uint8_t input[1024 + 1];
     for (int i = 0; i < countof(input) - 1; i++) {
         input[i]  = i % 255;
-//      printf("%c\n", 'A' + input[i]);
     }
     input[countof(input) - 1] = 0xFFu; // EOM end of message
     {
@@ -173,17 +182,16 @@ static int rc_test1(void) {
         printf("%d from %d\n", k, (int)bytes);
         assert(rc->error == 0 && k == countof(input));
     }
-    assert(memcmp(input, output, sizeof(input)) == 0);
-    return memcmp(input, output, sizeof(input));
+    return rc_compare(input, output, sizeof(input));
 }
 
 static int rc_test2(void) {
     // https://en.wikipedia.org/wiki/Lucas_number
     enum { bits = 5 };
-    uint64_t lucas[1u << bits];
+    size_t lucas[1u << bits];
     lucas[0] = 2;
     lucas[1] = 1;
-    uint64_t count = lucas[0] + lucas[1];
+    size_t count = lucas[0] + lucas[1];
     for (int32_t i = 2; i < countof(lucas); i++) {
         lucas[i] = lucas[i - 1] + lucas[i - 2];
         count += lucas[i];
@@ -192,8 +200,8 @@ static int rc_test2(void) {
     static uint8_t input[7881195];
     assert(count <= countof(input));
     int32_t ix = 0;
-    for (int32_t i = 2; i < countof(lucas); i++) {
-        for (int32_t j = 0; j < lucas[i]; j++) {
+    for (size_t i = 2; i < countof(lucas); i++) {
+        for (size_t j = 0; j < lucas[i]; j++) {
             input[ix++] = (uint8_t)(i % countof(lucas));
         }
     }
@@ -221,60 +229,47 @@ static int rc_test2(void) {
         size_t k = rc_decoder(rc, pm, output, count, -1);
         swear(rc->error == 0 && k == count);
     }
-    assert(memcmp(input, output, count) == 0);
-    return memcmp(input, output, count);
+    return rc_compare(input, output, count);
 }
 
-static int rc_test3(void) {
-    // test rc_scale_down_freq()
-    enum { bits = 2 };
+static int rc_test3(void) { // huge 1GB test
+    enum { bits = 8 };
     enum { n = 1u << bits };
-    static uint8_t input[n * 1024 * 1024];
-    for (int32_t i = 0; i < countof(input); i++) {
-        input[i] = (uint8_t)(i % n);
-    }
+    const size_t count = 1024 * 1024 * 1024 - 1024;
+    uint8_t* input = (uint8_t*)malloc(count);
+    if (input == null) { return E2BIG; }
+    for (size_t i = 0; i < count; i++) { input[i] = (uint8_t)(i % n); }
+    shuffle(input, count);
     {
         rc->write = write_byte;
         written = 0;
         pm_init(pm, n);
-        for (uint8_t i = 0; i < n; i++) { pm_update(pm, i, pm_max_freq - 1); }
-        rc_encoder(rc, pm, input, countof(input));
+        rc_encoder(rc, pm, input, count);
         assert(rc->error == 0);
     }
     {
         double e = entropy(pm, n);
-        const double bps = written * 8.0 / countof(input);
-        const double percent = 100.0 * written * 8 / ((int64_t)countof(input) * bits);
+        const double bps = written * 8.0 / count;
+        const double percent = 100.0 * written * 8 / ((int64_t)count * bits);
         printf("%lld compressed to %lld bytes. %.1f%% bps: %.3f Shannon H: %.3f\n",
-               ((uint64_t)countof(input) * bits / 8), (uint64_t)written,
+               ((uint64_t)count * bits / 8), (uint64_t)written,
                percent, bps, e);
     }
-    static uint8_t output[countof(input)];
+    uint8_t* output = (uint8_t*)malloc(count); // 4GB
+    if (output == null) { free(input); return E2BIG; }
     {
         rc->read  = read_byte;
         bytes = 0;
         pm_init(pm, n);
-        for (uint8_t i = 0; i < n; i++) { pm_update(pm, i, pm_max_freq - 1); }
-        size_t k = rc_decoder(rc, pm, output, countof(input), -1);
-        swear(rc->error == 0 && k == countof(input));
+        size_t k = rc_decoder(rc, pm, output, count, -1);
+        swear(rc->error == 0 && k == count);
     }
-    bool equal = memcmp(input, output, countof(input)) == 0;
-    if (!equal) {
-        for (size_t i = 0; i < countof(input); i++) {
-            if (input[i] != output[i]) {
-                printf("[%d]: %d != %d\n", (int)i, input[i], output[i]);
-            }
-        }
-    }
-    assert(equal);
-    return equal;
+    return rc_compare(input, output, count);
 }
-
 
 static int rc_tests(bool verbose) {
     (void)verbose;
-    return rc_test3();
-//  return rc_test0() || rc_test1() || rc_test2() || rc_test3();
+    return rc_test0() || rc_test1() || rc_test2() || rc_test3();
 }
 
 #endif
