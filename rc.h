@@ -3,9 +3,11 @@
 #include <stdint.h>
 
 #undef rc_debug
+//#define rc_debug
 
 #define rc_sym_bits  8
-#define rc_sym_count ((1uLL << rc_sym_bits))
+#define rc_sym_count (1uLL << rc_sym_bits)
+#define pm_max_freq  (1uLL << (64 - rc_sym_bits * 2 - 1))
 #define ft_max_bits  31
 
 struct prob_model  { // probability model
@@ -22,13 +24,16 @@ struct range_coder {
     uint64_t error; // sticky error (errno_t) from read/write
 };
 
-void pm_init(struct prob_model * fm, uint32_t n);
+void    pm_init(struct prob_model * fm, uint32_t n); // n <= 256
+void    pm_update(struct prob_model * fm, uint8_t sym, uint64_t inc);
 
-void rc_encoder(struct range_coder* rc, struct prob_model * fm,
-                uint8_t data[], size_t count);
+// decoder needs first 8 bytes in code
 
-size_t rc_decoder(struct range_coder* rc, struct prob_model * fm,
-                  uint8_t data[], size_t count, int32_t eom);
+void    rc_init(struct range_coder* rc, uint64_t code);
+void    rc_encode(struct range_coder* rc, struct prob_model * fm, uint8_t sym);
+uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm);
+
+// it is responsibility of the called to initialize the range_coder
 
 #endif // rc_header_included
 
@@ -106,7 +111,7 @@ static uint64_t pm_sum_of(struct prob_model * fm, uint32_t sym) {
     #ifdef RC_CHECK_FT
         uint64_t sum = 0;
         for (uint32_t i = 0; i < sym; i++) { sum += fm->freq[i]; }
-        assert(sum == s);
+        swear(sum == s);
     #endif
     return s;
 }
@@ -115,7 +120,7 @@ static uint64_t pm_total_freq(struct prob_model * fm) {
     uint64_t s = fm->tree[countof(fm->tree) - 1];
     #ifdef RC_CHECK_FT
         uint64_t sum = pm_sum_of(fm, rc_sym_count);
-        assert(sum == s);
+        swear(sum == s);
     #endif
     return s;
 }
@@ -129,7 +134,7 @@ static uint8_t pm_index_of(struct prob_model * fm, uint64_t sum) {
             assert(i < rc_sym_count - 1);
             i++;
         }
-        assert(i == ix);
+        swear(i == ix);
     #endif
     assert(0 <= ix && ix < rc_sym_count);
     return (uint8_t)ix;
@@ -143,8 +148,10 @@ void pm_init(struct prob_model * fm, uint32_t n) {
     ft_init(fm->tree, countof(fm->tree), fm->freq);
 }
 
-static void rc_scale_down_freq(struct prob_model * fm) { // to prevent overflow
-    if (fm->tree[countof(fm->tree) - 1] >= UINT64_MAX / 2) {
+static inline void rc_scale_down_freq(struct prob_model * fm) {
+    while (fm->tree[countof(fm->tree) - 1] >= pm_max_freq) {
+        printf("total: 0x%016llX\n", fm->tree[countof(fm->tree) - 1]);
+        // to prevent overflow
         for (int32_t i = 0; i < countof(fm->freq); i++) {
             fm->freq[i] = (fm->freq[i] + 1) / 2;
         }
@@ -152,10 +159,12 @@ static void rc_scale_down_freq(struct prob_model * fm) { // to prevent overflow
     }
 }
 
-static void rc_pm_update(struct prob_model * fm, uint16_t sym) {
+void pm_update(struct prob_model * fm, uint8_t sym, uint64_t inc) {
+    assert(inc <= pm_max_freq);
     rc_scale_down_freq(fm);
-    fm->freq[sym]++;
-    ft_update(fm->tree, countof(fm->tree), sym, 1);
+    fm->freq[sym] += inc;
+    ft_update(fm->tree, countof(fm->tree), sym, inc);
+    rc_scale_down_freq(fm);
 }
 
 static void rc_emit(struct range_coder* rc) {
@@ -165,8 +174,9 @@ static void rc_emit(struct range_coder* rc) {
     #endif
     const uint8_t byte = (uint8_t)(rc->low >> 56);
     rc->write(rc, byte);
-    rc->low <<= 8;
+    rc->low   <<= 8;
     rc->range <<= 8;
+    assert(rc->range != 0);
     #ifdef rc_debug
     printf("write(0x%02X) range: 0x%016llX := 0x%016llX low: 0x%016llX := 0x%016llX\n",
         byte, range, rc->range, low, rc->low);
@@ -177,43 +187,44 @@ static inline bool rc_leftmost_byte_is_same(struct range_coder* rc) {
     return (rc->low >> 56) == ((rc->low + rc->range) >> 56);
 }
 
-static void rc_encode(struct range_coder* rc, struct prob_model * fm,
-                      uint8_t sym) {
+void rc_init(struct range_coder* rc, uint64_t code) {
+    rc->low   = 0;
+    rc->range = UINT64_MAX;
+    rc->code  = code; // for decoder - first 8 bytes of input
+    rc->error = 0;
+}
+
+void rc_encode(struct range_coder* rc, struct prob_model * fm,
+               uint8_t sym) {
     #ifdef rc_debug
     const uint64_t range = rc->range;
-    const uint64_t low = rc->low;
+    const uint64_t low   = rc->low;
     #endif
     uint64_t total = pm_total_freq(fm);
     uint64_t start = pm_sum_of(fm, sym);
     uint64_t size  = fm->freq[sym];
+    assert(fm->freq[sym] > 0);
+    // alt:
+    // rc->low   += start * rc->range / total;
+    // rc->range /= total;
     rc->range /= total;
-    rc->low += start * rc->range;
+    rc->low   += start * rc->range;
     rc->range *= size;
+    #ifdef rc_debug
+    printf("`%c` start: %llu size: %llu "
+           "range: 0x%016llX := 0x%016llX "
+           "low: 0x%016llX := 0x%016llX total: 0x%016llX\n",
+            'A' + sym, start, size, range, rc->range, low, rc->low, total);
+    #endif
     while (rc_leftmost_byte_is_same(rc)) { rc_emit(rc); }
     while (rc->range < total) { rc_emit(rc); }
-    rc_pm_update(fm, sym);
-    #ifdef rc_debug
-    printf("%c start: %llu size: %llu "
-           "range: 0x%016llX := 0x%016llX "
-           "low: 0x%016llX := 0x%016llX\n",
-            'A' + sym, start, size, range, rc->range, low, rc->low);
-    #endif
+    pm_update(fm, sym, 1);
 }
 
 static void rc_flush(struct range_coder* rc) {
-    for (int i = 0; i < sizeof(rc->low); i++) { rc_emit(rc); }
-}
-
-void rc_encoder(struct range_coder* rc, struct prob_model * fm,
-                uint8_t data[], size_t count) {
-    rc->low   = 0;
-    rc->code  = 0;
-    rc->range = UINT64_MAX;
-    rc->error = 0;
-    for (size_t i = 0; i < count; i++) {
-        rc_encode(rc, fm, data[i]);
+    for (int i = 0; i < sizeof(rc->low); i++) {
+        rc->range = UINT64_MAX; rc_emit(rc);
     }
-    rc_flush(rc);
 }
 
 static void rc_consume(struct range_coder* rc) {
@@ -226,6 +237,7 @@ static void rc_consume(struct range_coder* rc) {
     rc->code    = (rc->code << 8) + byte;
     rc->low   <<= 8;
     rc->range <<= 8;
+    assert(rc->range != 0);
     #ifdef rc_debug
     printf("read(): 0x%02X range: 0x%016llX := 0x%016llX "
            "low: 0x%016llX := 0x%016llX "
@@ -234,41 +246,31 @@ static void rc_consume(struct range_coder* rc) {
     #endif
 }
 
-static uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm) {
+uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm) {
+    #ifdef rc_debug
+    const uint64_t range = rc->range;
+    const uint64_t low   = rc->low;
+    #endif
     uint64_t total = pm_total_freq(fm);
-    uint64_t sum = (rc->code - rc->low) / (rc->range / total);
-    uint8_t  sym = pm_index_of(fm, sum);
+    // alt:
+//  uint64_t sum   = (rc->code - rc->low) * total / rc->range;
+    uint64_t sum   = (rc->code - rc->low) / (rc->range / total);
+    uint8_t  sym   = pm_index_of(fm, sum);
     uint64_t start = pm_sum_of(fm, sym);
-    uint64_t size = fm->freq[sym];
+    uint64_t size  = fm->freq[sym];
     rc->range /= total;
-    rc->low += start * rc->range;
+    rc->low   += start * rc->range;
     rc->range *= size;
+    #ifdef rc_debug
+    printf("`%c` start: %llu size: %llu "
+           "range: 0x%016llX := 0x%016llX "
+           "low: 0x%016llX := 0x%016llX total: 0x%016llX\n",
+            'A' + sym, start, size, range, rc->range, low, rc->low, total);
+    #endif
     while (rc_leftmost_byte_is_same(rc)) rc_consume(rc);
     while (rc->range < total) rc_consume(rc);
-    rc_pm_update(fm, sym);
+    pm_update(fm, sym, 1);
     return sym;
-}
-
-size_t rc_decoder(struct range_coder* rc, struct prob_model * fm,
-                  uint8_t data[], size_t count, int32_t eom) {
-    rc->low   = 0;
-    rc->code  = 0;
-    rc->range = 1;
-    rc->error = 0;
-    for (int i = 0; i < sizeof(rc->low); i++) { rc_consume(rc); }
-    rc->range = UINT64_MAX;
-    size_t i = 0;
-    for (;;) {
-        uint8_t  sym = rc_decode(rc, fm);
-        assert(i < count);
-        if (i >= count) {
-            rc->error = E2BIG;
-        } else {
-            data[i++] = (uint8_t)sym;
-        }
-        if (eom >= 0 && sym == (uint8_t)eom) { break; }
-    }
-    return i;
 }
 
 #endif // rc_implementation

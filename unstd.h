@@ -19,22 +19,24 @@
 #undef countof
 #undef max
 #undef min
+#undef swap
+#undef swear
 #undef printf
 #undef println
-#undef swap
 
 #ifdef UNSTD_ASSERTS_IN_RELEASE
-#define assert  rt_swear
+#define assert(...)     rt_swear(__VA_ARGS__)
 #else
-#define assert  rt_assert
+#define assert(...)     rt_assert(__VA_ARGS__)
 #endif
 
-#define countof rt_countof
-#define max     rt_max
-#define min     rt_min
-#define printf  rt_printf
-#define println rt_println
-#define swap    rt_swap
+#define countof(a) rt_countof(a)
+#define max(a, b)       rt_max(a, b)
+#define min(a, b)       rt_min(a, b)
+#define swap(a, b)      rt_swap(a, b)
+#define swear(...)      rt_swear(__VA_ARGS__)
+#define printf(...)     rt_printf(__VA_ARGS__)
+#define println(...)    rt_println(__VA_ARGS__)
 
 #endif
 

@@ -61,7 +61,6 @@ int32_t rt_exit(int exit_code);
 #define rt_println(...) rt_printf_implementation(__FILE__,          \
                         __LINE__, __func__, true, "" __VA_ARGS__)
 
-
 int32_t rt_printf_implementation(const char* file, int32_t line,
                                  const char* func, bool append_line_feed,
                                  const char* format,
