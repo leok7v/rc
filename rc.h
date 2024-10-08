@@ -2,7 +2,13 @@
 #define rc_header_included
 #include <stdint.h>
 
-// swap next two lines do enable debug printfs
+// This range_coder implementation does 8 bit -> 8 bit compression
+// only. But for the alphabet of number of symbols `n` where n < 256
+// pm_init(pm, n) will set first n symbols frequencies to 1 and
+// the rest to 0 which effectively make log2(n) -> 8 bit encoding
+// possible.
+
+// swap next two lines do enable debug printf
 #define rc_debug
 #undef  rc_debug
 
@@ -10,6 +16,20 @@
 #define rc_sym_count (1uLL << rc_sym_bits)
 #define pm_max_freq  (1uLL << (64 - rc_sym_bits))
 #define ft_max_bits  31
+
+// See: posix errno.h https://pubs.opengroup.org/onlinepubs/9699919799/
+// Range coder errors can be any values != 0 but for the convenience
+// of debugging (e.g. strerror()) and testing de facto
+// errno_t values are used.
+
+#define rc_err_io            5 // EIO   : I/O error
+#define rc_err_too_big       7 // E2BIG : Argument list too long
+#define rc_err_no_memory    12 // ENOMEM: Out of memory
+#define rc_err_invalid      22 // EINVAL: Invalid argument
+#define rc_err_range        34 // ERANGE: Result too large
+#define rc_err_data         42 // EILSEQ: Illegal byte sequence
+#define rc_err_unsupported  40 // ENOSYS: Functionality not supported
+#define rc_err_no_space     55 // ENOBUFS: No buffer space available
 
 struct prob_model  { // probability model
     uint64_t freq[rc_sym_count];
@@ -22,7 +42,7 @@ struct range_coder {
     uint64_t code;
     void    (*write)(struct range_coder*, uint8_t);
     uint8_t (*read)(struct range_coder*);
-    uint64_t error; // sticky error (errno_t) from read/write
+    int     error; // sticky error (e.g. errno_t) from read/write
 };
 
 void    pm_init(struct prob_model * fm, uint32_t n); // n <= 256
@@ -90,7 +110,8 @@ static int32_t ft_index_of(uint64_t tree[], size_t n, uint64_t const sum) {
     // returns -1 if sum is less than any element of a[]
     assert(2 <= n && n <= (1u << ft_max_bits));
     assert((n & (n - 1)) == 0); // only works for power 2
-    if (sum >= tree[n - 1]) { return (int32_t)(n - 1); }
+    assert(sum < tree[n - 1]);  // sum must be less than total sum
+    if (sum >= tree[n - 1]) { return -1; }
     uint64_t value = sum;
     uint32_t i = 0;
     uint32_t mask = (uint32_t)(n >> 1);
@@ -128,7 +149,7 @@ static uint64_t pm_total_freq(struct prob_model * fm) {
     return s;
 }
 
-static uint8_t pm_index_of(struct prob_model * fm, uint64_t sum) {
+static int32_t pm_index_of(struct prob_model * fm, uint64_t sum) {
     int32_t ix = ft_index_of(fm->tree, countof(fm->tree), sum) + 1;
     #ifdef RC_CHECK_FT
         uint8_t i = 0;
@@ -144,7 +165,7 @@ static uint8_t pm_index_of(struct prob_model * fm, uint64_t sum) {
 }
 
 void pm_init(struct prob_model * fm, uint32_t n) {
-    assert(2 <= n && n <= rc_sym_count);
+    swear(2 <= n && n <= rc_sym_count);
     for (size_t i = 0; i < countof(fm->freq); i++) {
         fm->freq[i] = i < n ? 1 : 0;
     }
@@ -245,35 +266,42 @@ void rc_encode(struct range_coder* rc, struct prob_model * fm,
     }
 }
 
+static uint8_t rc_err(struct range_coder* rc, int32_t e) {
+    rc->error = e;
+    return 0;
+}
+
 uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm) {
     #ifdef rc_debug
     const uint64_t range = rc->range;
     const uint64_t low   = rc->low;
     #endif
     uint64_t total = pm_total_freq(fm);
+    if (total < 1) { return rc_err(rc, rc_err_invalid); }
     uint64_t sum   = (rc->code - rc->low) / (rc->range / total);
-    uint8_t  sym   = pm_index_of(fm, sum);
+    int32_t  sym   = pm_index_of(fm, sum);
+    if (sym < 0 || fm->freq[sym] == 0) { return rc_err(rc, rc_err_data); }
     uint64_t start = pm_sum_of(fm, sym);
     uint64_t size  = fm->freq[sym];
-    assert(rc->range >= total);
+    if (size == 0 || rc->range < total) { return rc_err(rc, rc_err_data); }
     rc->range /= total;
     rc->low   += start * rc->range;
     rc->range *= size;
     #ifdef rc_debug
     printf("`%c` start: %llu size: %llu "
-           "range: 0x%016llX := 0x%016llX "
-           "low: 0x%016llX := 0x%016llX total: 0x%016llX\n",
+            "range: 0x%016llX := 0x%016llX "
+            "low: 0x%016llX := 0x%016llX total: 0x%016llX\n",
             'A' + sym, start, size, range, rc->range, low, rc->low, total);
     #endif
-    pm_update(fm, sym, 1);
+    pm_update(fm, (uint8_t)sym, 1);
     while (rc_leftmost_byte_is_same(rc)) { rc_consume(rc); }
     if (rc->range < (total + 1) * rc_sym_count) {
         rc_consume(rc);
         rc_consume(rc);
-        assert(rc->low < total + 1);
+        if (rc->low > total + 1) { rc_err(rc, rc_err_data); }
         rc->range = total + 1 - rc->low;
     }
-    return sym;
+    return (uint8_t)sym;
 }
 
 #endif // rc_implementation

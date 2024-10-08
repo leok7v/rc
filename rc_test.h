@@ -17,6 +17,8 @@
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 #endif
 
+static_assert(sizeof(int) >= 4, "tests are only for 32/64 bit platforms");
+
 static void rc_encoder(struct range_coder* rc, struct prob_model * fm,
                        uint8_t data[], size_t count) {
     rc_init(rc, 0);
@@ -29,7 +31,7 @@ static void rc_encoder(struct range_coder* rc, struct prob_model * fm,
 static size_t rc_decoder(struct range_coder* rc, struct prob_model * fm,
                          uint8_t data[], size_t count, int32_t eom) {
     rc->code = 0;
-    for (int i = 0; i < sizeof(rc->code); i++) {
+    for (int8_t i = 0; i < sizeof(rc->code); i++) {
         rc->code = (rc->code << 8) + rc->read(rc);
     }
     rc_init(rc, rc->code);
@@ -69,13 +71,26 @@ static void shuffle(uint8_t a[], size_t n) {
     }
 }
 
-static uint8_t data[1024 * 1024 * 1024];
-static size_t  written;
-static size_t  bytes; // read
+static uint8_t  data[1024 * 1024 * 1024]; // 1GB buffer for compressed output
+static size_t   bytes;    // number of bytes read by read_byte()
+static size_t   written;  // number of bytes written by write_byte()
+static uint64_t checksum; // FNV hash
+
+static void checksum_init(void) {
+    checksum = 0xCBF29CE484222325;
+}
+
+static void checksum_append(const uint8_t byte) {
+    checksum ^= byte;
+    checksum *= 0x100000001B3; // FNV prime
+    checksum ^= (checksum >> 32);
+    checksum  = (checksum << 7) | (checksum >> (64 - 7));
+}
 
 static void write_byte(struct range_coder* rc, uint8_t b) {
     if (rc->error == 0) {
         if (written < sizeof(data)) {
+            checksum_append(b);
             data[written++] = b;
         } else {
             rc->error = E2BIG;
@@ -88,12 +103,25 @@ static uint8_t read_byte(struct range_coder* rc) {
         if (bytes >= written) {
             rc->error = EIO;
         } else if (bytes < sizeof(data)) {
+            checksum_append(data[bytes]);
             return data[bytes++];
         } else {
             rc->error = E2BIG;
         }
     }
     return 0;
+}
+
+static void init_write(struct range_coder* rc) {
+    checksum_init();
+    written = 0;
+    rc->write = write_byte;
+}
+
+static void init_read(struct range_coder* rc) {
+    checksum_init();
+    bytes = 0;
+    rc->read = read_byte;
 }
 
 static double entropy(struct prob_model* pm, size_t n) {
@@ -122,7 +150,12 @@ static struct range_coder* rc = &coder;
 static struct prob_model  model;
 static struct prob_model* pm = &model;
 
-static int rc_compare(uint8_t input[], uint8_t output[], size_t n) {
+static int32_t rc_compare(uint8_t input[], uint8_t output[],
+                          size_t n, uint64_t ecs) {
+    if (ecs != checksum) {
+        printf("checksum encoder: %016llX != decoder: %016llX\n",
+                ecs, checksum);
+    }
     bool equal = memcmp(input, output, n) == 0;
     if (!equal) {
         for (size_t i = 0; i < n; i++) {
@@ -133,59 +166,56 @@ static int rc_compare(uint8_t input[], uint8_t output[], size_t n) {
         }
     }
     assert(equal);
-    return equal ? 0 : EINVAL;
+    return equal && ecs == checksum ? 0 : rc_err_data;
 }
 
-static int rc_test0(void) {
-    rc->write = write_byte;
-    rc->read  = read_byte;
-    bytes = 0;
-    written = 0;
+static int32_t rc_test0(void) {
     static uint8_t input[2];
-    for (int i = 0; i < countof(input); i++) { input[i]  = (uint8_t)i; }
+    for (int32_t i = 0; i < countof(input); i++) { input[i]  = (uint8_t)i; }
     {
         pm_init(pm, 2); // probability model
+        init_write(rc);
         rc_encoder(rc, pm, input, sizeof(input));
         printf("%d\n", (int)written);
         assert(rc->error == 0);
     }
+    uint64_t ecs = checksum; // encoder check sum
     static uint8_t output[countof(input)];
     {
         pm_init(pm, 2); // probability model
+        init_read(rc);
         size_t k = rc_decoder(rc, pm, output, sizeof(output), 1); // eom == 1
         printf("%d from %d\n", k, (int)bytes);
         assert(rc->error == 0 && k == countof(input));
     }
-    return rc_compare(input, output, sizeof(input));
+    return rc_compare(input, output, sizeof(input), ecs);
 }
 
-static int rc_test1(void) {
-    rc->write = write_byte;
-    rc->read  = read_byte;
-    bytes = 0;
-    written = 0;
+static int32_t rc_test1(void) {
     static uint8_t input[1024 + 1];
-    for (int i = 0; i < countof(input) - 1; i++) {
+    for (int32_t i = 0; i < countof(input) - 1; i++) {
         input[i]  = i % 255;
     }
     input[countof(input) - 1] = 0xFFu; // EOM end of message
     {
         pm_init(pm, 256);
+        init_write(rc);
         rc_encoder(rc, pm, input, sizeof(input));
-        printf("%d\n", (int)written);
         assert(rc->error == 0);
     }
+    uint64_t ecs = checksum; // encoder check sum
     static uint8_t output[countof(input)];
     {
         pm_init(pm, 256);
+        init_read(rc);
         size_t k = rc_decoder(rc, pm, output, sizeof(output), 0xFF);
         printf("%d from %d\n", k, (int)bytes);
         assert(rc->error == 0 && k == countof(input));
     }
-    return rc_compare(input, output, sizeof(input));
+    return rc_compare(input, output, sizeof(input), ecs);
 }
 
-static int rc_test2(void) {
+static int32_t rc_test2(void) {
     // https://en.wikipedia.org/wiki/Lucas_number
     enum { bits = 5 };
     size_t lucas[1u << bits];
@@ -207,12 +237,12 @@ static int rc_test2(void) {
     }
     shuffle(input, count);
     {
-        rc->write = write_byte;
-        written = 0;
         pm_init(pm, countof(lucas));
+        init_write(rc);
         rc_encoder(rc, pm, input, count);
         assert(rc->error == 0);
     }
+    uint64_t ecs = checksum; // encoder check sum
     {
         double e = entropy(pm, countof(lucas));
         const double bps = written * 8.0 / count;
@@ -223,16 +253,56 @@ static int rc_test2(void) {
     }
     static uint8_t output[countof(input)];
     {
-        rc->read  = read_byte;
-        bytes = 0;
         pm_init(pm, countof(lucas));
+        init_read(rc);
         size_t k = rc_decoder(rc, pm, output, count, -1);
         swear(rc->error == 0 && k == count);
     }
-    return rc_compare(input, output, count);
+    return rc_compare(input, output, count, ecs);
 }
 
-static int rc_test3(void) { // huge 1GB test
+static int32_t rc_test3(void) { // fuzzing corrupted stream
+    static uint8_t input[256];
+    for (int8_t i = 0; i < countof(input); i++) { input[i] = i; }
+    {
+        pm_init(pm, 256);
+        init_write(rc);
+        rc_encoder(rc, pm, input, countof(input));
+        assert(rc->error == 0);
+    }
+    uint64_t ecs = checksum; // encoder check sum
+    static uint8_t output[countof(input)];
+    for (int32_t i = 0; i < 64 * 1024; i++) {
+        int32_t ix  = (int32_t)(written * rand64(&seed));
+        uint8_t bad = (uint8_t)(256 * rand64(&seed));
+        if ((data[ix] ^ bad) != data[ix]) {
+            data[ix] = data[ix] ^ bad;
+            pm_init(pm, 256);
+            init_read(rc);
+            size_t k = rc_decoder(rc, pm, output, countof(output), 0xFF);
+            // Not all data corruption will result in decoder rc->error
+            // some bits corruption may result in legitimate data
+            // that is decoded in a wrong way. Checking size, checksum
+            // and ultimately resulting bits is the remedy.
+            // There is no 100% reliable way to ensure that compressed
+            // data was not corrupted or intentionally tinkered with.
+            if (rc->error != 0) {
+                // decoder reported an error
+//              printf("error: %d \"%s\"\n", rc->error, strerror(rc->error));
+            } else if (k != countof(input)) {
+                // length differ
+//              printf("error: %d != %d\n", (int)k, (int)countof(input));
+            } else {
+                bool equal = memcmp(input, output, k) == 0;
+                assert(!equal && ecs != checksum);
+                printf("equal: %d checksum: %016llX %016llX\n", equal, ecs, checksum);
+            }
+        }
+    }
+    return 0;
+}
+
+static int32_t rc_test9(void) { // huge 1GB test
     enum { bits = 8 };
     enum { n = 1u << bits };
     const size_t count = 1024 * 1024 * 1024 - 1024;
@@ -241,12 +311,12 @@ static int rc_test3(void) { // huge 1GB test
     for (size_t i = 0; i < count; i++) { input[i] = (uint8_t)(i % n); }
     shuffle(input, count);
     {
-        rc->write = write_byte;
-        written = 0;
         pm_init(pm, n);
+        init_write(rc);
         rc_encoder(rc, pm, input, count);
         assert(rc->error == 0);
     }
+    uint64_t ecs = checksum; // encoder check sum
     {
         double e = entropy(pm, n);
         const double bps = written * 8.0 / count;
@@ -258,18 +328,17 @@ static int rc_test3(void) { // huge 1GB test
     uint8_t* output = (uint8_t*)malloc(count); // 4GB
     if (output == null) { free(input); return E2BIG; }
     {
-        rc->read  = read_byte;
-        bytes = 0;
         pm_init(pm, n);
+        init_read(rc);
         size_t k = rc_decoder(rc, pm, output, count, -1);
         swear(rc->error == 0 && k == count);
     }
-    return rc_compare(input, output, count);
+    return rc_compare(input, output, count, ecs);
 }
 
-static int rc_tests(bool verbose) {
+static int32_t rc_tests(bool verbose) {
     (void)verbose;
-    return rc_test0() || rc_test1() || rc_test2() || rc_test3();
+    return rc_test0() || rc_test1() || rc_test2() || rc_test3() || rc_test9();
 }
 
 #endif
