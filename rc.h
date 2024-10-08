@@ -261,7 +261,7 @@ void rc_encode(struct range_coder* rc, struct prob_model * fm,
     #endif
     pm_update(fm, sym, 1);
     while (rc_leftmost_byte_is_same(rc)) { rc_emit(rc); }
-    if (rc->range < (total + 1) * rc_sym_count) {
+    if (rc->range < total + 1) { // TODO: before or after pm_update?
         rc_emit(rc);
         rc_emit(rc);
         rc->range = UINT64_MAX - rc->low;
@@ -280,7 +280,7 @@ uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm) {
     #endif
     uint64_t total = pm_total_freq(fm);
     if (total < 1) { return rc_err(rc, rc_err_invalid); }
-    if (rc->range < (total + 1) * rc_sym_count) {
+    if (rc->range < total) {
         rc_consume(rc);
         rc_consume(rc);
         rc->range = UINT64_MAX - rc->low;

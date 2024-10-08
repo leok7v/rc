@@ -68,8 +68,8 @@ static void shuffle(uint8_t a[], size_t n) {
     for (size_t i = 0; i < n; i++) {
         size_t k = (size_t)(n * rand64(&seed));
         size_t j = (size_t)(n * rand64(&seed));
-        assert(0 <= k && k < n);
-        assert(0 <= j && j < n);
+        swear(0 <= k && k < n);
+        swear(0 <= j && j < n);
         if (i != j) { swap(a[k], a[j]); }
     }
 }
@@ -130,19 +130,19 @@ static void init_read(struct range_coder* rc) {
 }
 
 static double entropy(struct prob_model* pm, size_t n) {
-    assert(pm->tree[countof(pm->tree) - 1] > 0); // total frequency
+    swear(pm->tree[countof(pm->tree) - 1] > 0); // total frequency
     double e = 0;
     double total = 0;
     for (size_t i = 0; i < n; i++) {
-        assert(pm->freq[i] > 0);
+        swear(pm->freq[i] > 0);
         if (pm->freq[i] > 0) { total += pm->freq[i]; }
     }
-    assert(total == pm->tree[countof(pm->tree) - 1]);
+    swear(total == pm->tree[countof(pm->tree) - 1]);
     for (size_t i = 0; i < n; i++) {
-        assert(pm->freq[i] > 0);
+        swear(pm->freq[i] > 0);
         if (pm->freq[i] > 0) {
             double p = pm->freq[i] / total;
-            assert(p < 1.0);
+            swear(p < 1.0);
             e -= p * log2(p);
         }
     }
@@ -170,7 +170,7 @@ static int32_t rc_compare(uint8_t input[], uint8_t output[],
             }
         }
     }
-    assert(equal);
+    swear(equal);
     return equal && ecs == checksum ? 0 : rc_err_data;
 }
 
@@ -178,7 +178,7 @@ static uint64_t encode(uint8_t a[], size_t n, uint32_t symbols) {
     pm_init(pm, symbols);
     init_write(rc);
     rc_encoder(rc, pm, a, n);
-    assert(rc->error == 0);
+    swear(rc->error == 0);
     return checksum;
 }
 
@@ -231,7 +231,7 @@ static int32_t rc_test2(void) {
     }
     // sum(Lucas(0), ..., Lucas(31)) = 7,881,195
     static uint8_t input[7881195];
-    assert(count <= countof(input));
+    swear(count <= countof(input));
     int32_t ix = 0;
     for (size_t i = 2; i < countof(lucas); i++) {
         for (size_t j = 0; j < lucas[i]; j++) {
@@ -313,10 +313,11 @@ static int32_t rc_test9(void) { // huge 1GB test
     if (output == null) { free(input); return rc_err_no_memory; }
     size_t k = decode(output, count, symbols, -1); // no EOM
     swear(rc->error == 0 && k == count && ecs == checksum);
+    int32_t r = rc_compare(input, output, count, ecs);
     free(input);
     free(output);
     if (rc_verbose) { printf("<<<test9\n"); }
-    return rc_compare(input, output, count, ecs);
+    return r;
 }
 
 static int32_t rc_tests(bool verbose) {
