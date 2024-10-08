@@ -42,7 +42,7 @@ struct range_coder {
     uint64_t code;
     void    (*write)(struct range_coder*, uint8_t);
     uint8_t (*read)(struct range_coder*);
-    int     error; // sticky error (e.g. errno_t) from read/write
+    int32_t  error; // sticky error (e.g. errno_t from read/write)
 };
 
 void    pm_init(struct prob_model * fm, uint32_t n); // n <= 256
@@ -110,7 +110,9 @@ static int32_t ft_index_of(uint64_t tree[], size_t n, uint64_t const sum) {
     // returns -1 if sum is less than any element of a[]
     assert(2 <= n && n <= (1u << ft_max_bits));
     assert((n & (n - 1)) == 0); // only works for power 2
-    assert(sum < tree[n - 1]);  // sum must be less than total sum
+    // sum must be less than total sum
+    // but because decoder input data can be corrupted
+    // instead of assert(sum < tree[n - 1]) here check and return -1
     if (sum >= tree[n - 1]) { return -1; }
     uint64_t value = sum;
     uint32_t i = 0;
@@ -174,10 +176,10 @@ void pm_init(struct prob_model * fm, uint32_t n) {
 
 void pm_update(struct prob_model * fm, uint8_t sym, uint64_t inc) {
     // pm_max_freq (1 << 56) will be reached after processing
-    // 4 Petabytes (4096 Terrabytes) of data. Assumption that
-    // frequency model is pretty stable at this point and further
-    // updates will be ignored.
-    if (fm->tree[countof(fm->tree) - 1] <= pm_max_freq) {
+    // 4 Petabytes (4096 Terabytes) of data. Assumption that
+    // frequency model is pretty stable at this point and
+    // further updates will be ignored.
+    if (fm->tree[countof(fm->tree) - 1] < pm_max_freq) {
         assert(inc <= pm_max_freq - fm->freq[sym]);
         fm->freq[sym] += inc;
         ft_update(fm->tree, countof(fm->tree), sym, inc);
@@ -213,7 +215,8 @@ void rc_init(struct range_coder* rc, uint64_t code) {
 
 static void rc_flush(struct range_coder* rc) {
     for (int i = 0; i < sizeof(rc->low); i++) {
-        rc->range = UINT64_MAX; rc_emit(rc);
+        rc->range = UINT64_MAX;
+        rc_emit(rc);
     }
 }
 
@@ -261,8 +264,7 @@ void rc_encode(struct range_coder* rc, struct prob_model * fm,
     if (rc->range < (total + 1) * rc_sym_count) {
         rc_emit(rc);
         rc_emit(rc);
-        assert(rc->low < total + 1);
-        rc->range = total + 1 - rc->low;
+        rc->range = UINT64_MAX - rc->low;
     }
 }
 
@@ -278,6 +280,11 @@ uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm) {
     #endif
     uint64_t total = pm_total_freq(fm);
     if (total < 1) { return rc_err(rc, rc_err_invalid); }
+    if (rc->range < (total + 1) * rc_sym_count) {
+        rc_consume(rc);
+        rc_consume(rc);
+        rc->range = UINT64_MAX - rc->low;
+    }
     uint64_t sum   = (rc->code - rc->low) / (rc->range / total);
     int32_t  sym   = pm_index_of(fm, sum);
     if (sym < 0 || fm->freq[sym] == 0) { return rc_err(rc, rc_err_data); }
@@ -295,12 +302,6 @@ uint8_t rc_decode(struct range_coder* rc, struct prob_model * fm) {
     #endif
     pm_update(fm, (uint8_t)sym, 1);
     while (rc_leftmost_byte_is_same(rc)) { rc_consume(rc); }
-    if (rc->range < (total + 1) * rc_sym_count) {
-        rc_consume(rc);
-        rc_consume(rc);
-        if (rc->low > total + 1) { rc_err(rc, rc_err_data); }
-        rc->range = total + 1 - rc->low;
-    }
     return (uint8_t)sym;
 }
 

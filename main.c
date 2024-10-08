@@ -9,10 +9,9 @@
 
 int main(int argc, const char* argv[]) {
     bool verbose = false;
-    for (int i = 1; i < argc && verbose; i++) {
+    for (int i = 1; i < argc && !verbose; i++) {
         verbose = strcmp(argv[i], "-v") == 0 ||
                   strcmp(argv[i], "--verbose") == 0;
     }
-    rc_tests(verbose);
-    return 0;
+    return rc_tests(verbose);
 }
