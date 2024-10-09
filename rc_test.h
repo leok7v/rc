@@ -154,13 +154,23 @@ static void init_read(struct range_coder* rc) {
     rc->read = read_byte;
 }
 
+// Why "if a[i] > 1"?
+// Because adaptive model assumes that all symbol in the
+// alphabet that has not been seen yet have frequency 1.
+// This is important for encoder and decoder to be able
+// to be in sync at the start.
+
 static double entropy(const uint64_t a[], size_t n) {
     double total = 0;
-    for (size_t i = 0; i < n; i++) { total += a[i]; }
+    for (size_t i = 0; i < n; i++) {
+        if (a[i] > 1) { total += a[i]; }
+    }
     double e = 0;
     for (size_t i = 0; i < n; i++) {
-        double p = a[i] / total;
-        e -= p * log2(p);
+        if (a[i] > 1) {
+            double p = a[i] / total;
+            e -= p * log2(p);
+        }
     }
     return e;
 }
