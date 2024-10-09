@@ -57,32 +57,30 @@ static double rand64(uint64_t *state) { // [0.0..1.0) exclusive to 1.0
     return (double)random64(state) / ((double)UINT64_MAX + 1.0);
 }
 
-static void shuffle_uint8_t(uint8_t a[], size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        size_t k = (size_t)(n * rand64(&seed));
-        size_t j = (size_t)(n * rand64(&seed));
-        swear(0 <= k && k < n);
-        swear(0 <= j && j < n);
-        if (k != j) { swap(a[k], a[j]); }
-    }
+#define shuffle_t(t) \
+static void shuffle_##t(t a[], size_t n) {      \
+    for (size_t i = 0; i < n; i++) {            \
+        size_t k = (size_t)(n * rand64(&seed)); \
+        size_t j = (size_t)(n * rand64(&seed)); \
+        swear(0 <= k && k < n);                 \
+        swear(0 <= j && j < n);                 \
+        if (k != j) { swap(a[k], a[j]); }       \
+    }                                           \
 }
 
-static void shuffle_uint64_t(uint64_t a[], size_t n) {
-    for (size_t i = 0; i < n; i++) {
-        size_t k = (size_t)(n * rand64(&seed));
-        size_t j = (size_t)(n * rand64(&seed));
-        swear(0 <= k && k < n);
-        swear(0 <= j && j < n);
-        if (k != j) { swap(a[k], a[j]); }
-    }
-}
+shuffle_t(uint8_t)
+shuffle_t(uint16_t)
+shuffle_t(uint32_t)
+shuffle_t(uint64_t)
 
-static inline void shuffle_def(void) { }
+static inline void shuffle_not_implemented(void) { }
 
-#define shuffle(a, n) _Generic(a[0], \
-    uint8_t:  shuffle_uint8_t,       \
-    uint64_t: shuffle_uint64_t,      \
-    default:  shuffle_def)(a, n)
+#define shuffle(a, n) _Generic(a[0],        \
+    uint8_t:  shuffle_uint8_t,              \
+    uint16_t: shuffle_uint16_t,             \
+    uint32_t: shuffle_uint32_t,             \
+    uint64_t: shuffle_uint64_t,             \
+    default:  shuffle_not_implemented)(a, n)
 
 static void rc_encoder(struct range_coder* rc, struct prob_model * fm,
                        const uint8_t data[], size_t count) {
@@ -175,7 +173,7 @@ static uint8_t io_read(struct range_coder* rc) {
 }
 
 static void io_alloc(struct range_coder* rc, size_t capacity) {
-    io.data = (uint8_t*)allocate(capacity);
+    io.data = allocate(capacity);
     io.c = capacity;
     io.bytes = 0;
     io.written = 0;
@@ -335,9 +333,7 @@ static int32_t rc_test3(void) {
     enum { n = 1024 * 1024 };
     io_alloc(rc, n * 2 + 8);
     uint64_t zips[symbols];
-    for (int32_t i = 0; i < countof(zips); i++) {
-        zips[i] = i + 1;
-    }
+    for (int32_t i = 0; i < countof(zips); i++) { zips[i] = i + 1; }
     uint8_t* in = allocate(n);
     rc_fill(in, n, zips, countof(zips), symbols);
     uint64_t ecs = encode(in, n, symbols);
@@ -353,8 +349,142 @@ static int32_t rc_test3(void) {
     return r;
 }
 
-static int32_t rc_test4(void) { // fuzzing corrupted stream
-    rc_enter("Fizzing");
+static int32_t rc_test4(void) {
+    rc_enter("Lorem ipsum");
+    static const char text[] =
+        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, "
+        "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
+        "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris "
+        "nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in "
+        "reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla "
+        "pariatur. Excepteur sint occaecat cupidatat non proident, sunt in "
+        "culpa qui officia deserunt mollit anim id est laborum.";
+    enum { bits = 8 };
+    enum { symbols = 1 << bits };
+    enum { n = countof(text) - 1 }; // last byte text[countof(text)] == 0
+    io_alloc(rc, n * 2 + 8);
+    const uint8_t* in = (const uint8_t*)text;
+    uint64_t ecs = encode(in, n, symbols);
+    if (rc_verbose) { rc_stats(n, io.written, bits); }
+    uint8_t out[n];
+    size_t k = decode(out, n, symbols, -1);
+    swear(rc->error == 0 && k == n && ecs == io.checksum);
+    io_free();
+    rc_exit();
+    return 0;
+}
+
+static int32_t rc_test5(void) {
+    rc_enter("Multi stream");
+    enum { bits = 8 };
+    enum { symbols = 1 << bits };
+    enum { n = 64 * 1024 };
+    uint8_t*  in_text = allocate(n);
+    uint16_t* in_size = allocate(n * sizeof(uint16_t));
+    uint32_t* in_dist = allocate(n * sizeof(uint32_t));
+    for (size_t i = 0; i < n; i++) {
+        const double z = 1.0 / (n - i); // Zipf's 1/f
+        in_text[i] = (uint8_t) (z * rand64(&seed)  * symbols);
+        in_size[i] = (uint16_t)(z * rand64(&seed) * ((double)UINT16_MAX + 1));
+        in_dist[i] = (uint32_t)(z * rand64(&seed) * ((double)UINT32_MAX + 1));
+    }
+    shuffle(in_text, n);
+    shuffle(in_size, n);
+    shuffle(in_dist, n);
+    io_alloc(rc, n * 8 * 2);
+    struct prob_model  model_text;
+    struct prob_model* pm_text = &model_text;
+    struct prob_model  model_size[2];
+    struct prob_model* pm_size[2] = {&model_size[0], &model_size[1]};
+    struct prob_model  model_dist[4];
+    struct prob_model* pm_dist[4] = { &model_dist[0], &model_dist[1],
+                                      &model_dist[2], &model_dist[3] };
+    // encoder:
+    pm_init(pm_text, symbols);
+    for (int j = 0; j < 2; j++) { pm_init(pm_size[j], symbols); }
+    for (int j = 0; j < 4; j++) { pm_init(pm_dist[j], symbols); }
+    rc_init(rc, 0);
+    for (size_t i = 0; i < n; i++) {
+        rc_encode(rc, pm_text, in_text[i]);
+        for (int j = 0; j < 2; j++) {
+            rc_encode(rc, pm_size[j], (uint8_t)(in_size[i] >> (j * 8)));
+        }
+        for (int j = 0; j < 4; j++) {
+            rc_encode(rc, pm_dist[j], (uint8_t)(in_dist[i] >> (j * 8)));
+        }
+    }
+    rc_flush(rc);
+    swear(rc->error == 0);
+    uint64_t ecs = io.checksum;
+    if (rc_verbose) {
+        const double e =
+            entropy(pm_text->freq, symbols) +
+            entropy(pm_size[0]->freq, symbols) +
+            entropy(pm_size[1]->freq, symbols) +
+            entropy(pm_dist[0]->freq, symbols) +
+            entropy(pm_dist[1]->freq, symbols) +
+            entropy(pm_dist[2]->freq, symbols) +
+            entropy(pm_dist[3]->freq, symbols);
+        const uint64_t in_bits = n * (1 + 2 + 4) * 8;
+        const double percent = 100.0 * io.written * 8.0 / in_bits;
+        printf("%lld to %lld bytes. %.1f%%\n",
+                ((uint64_t)in_bits / 8), (uint64_t)io.written, percent);
+        printf("Shannon H: %.3f text: %.3f size: %.3f %.3f dist: %.3f %.3f %.3f %.3f\n",
+            e / (1 + 2 + 4),
+            entropy(pm_text->freq, symbols),
+            entropy(pm_size[0]->freq, symbols),
+            entropy(pm_size[1]->freq, symbols),
+            entropy(pm_dist[0]->freq, symbols),
+            entropy(pm_dist[1]->freq, symbols),
+            entropy(pm_dist[2]->freq, symbols),
+            entropy(pm_dist[3]->freq, symbols));
+    }
+    // decoder:
+    pm_init(pm_text, symbols);
+    for (int j = 0; j < 2; j++) { pm_init(pm_size[j], symbols); }
+    for (int j = 0; j < 4; j++) { pm_init(pm_dist[j], symbols); }
+    io_rewind();
+    rc->code = 0;
+    for (size_t i = 0; i < sizeof(rc->code); i++) {
+        rc->code = (rc->code << 8) + rc->read(rc);
+    }
+    rc_init(rc, rc->code);
+    uint8_t*  out_text = allocate(n);
+    uint16_t* out_size = allocate(n * sizeof(uint16_t));
+    uint32_t* out_dist = allocate(n * sizeof(uint32_t));
+    for (size_t i = 0; i < n; i++) {
+        out_text[i] = rc_decode(rc, pm_text);
+        out_size[i] = 0;
+        for (int j = 0; j < 2; j++) {
+            out_size[i] |= rc_decode(rc, pm_size[j]) << (j * 8);
+        }
+        out_dist[i] = 0;
+        for (int j = 0; j < 4; j++) {
+            out_dist[i] |= rc_decode(rc, pm_dist[j]) << (j * 8);
+        }
+    }
+    swear(rc->error == 0 && ecs == io.checksum);
+    int32_t r = rc_cmp(in_text, out_text, n, ecs);
+    if (memcmp(in_size, out_size, n * sizeof(uint16_t)) != 0) {
+        r = rc_err_invalid;
+    }
+    if (memcmp(in_dist, out_dist, n * sizeof(uint32_t)) != 0) {
+        r = rc_err_invalid;
+    }
+    io_free();
+    free(out_dist);
+    free(out_size);
+    free(out_text);
+    free(in_dist);
+    free(in_size);
+    free(in_text);
+    rc_exit();
+    return r;
+}
+
+static int32_t rc_test8(void) { // fuzzing: corrupted stream
+    // https://en.wikipedia.org/wiki/Fuzzing
+    rc_enter("Fuzzing");
     enum { symbols = 256 };
     enum { n = 256 };
     io_alloc(rc, n * 2 + 8);
@@ -394,31 +524,6 @@ static int32_t rc_test4(void) { // fuzzing corrupted stream
     return 0;
 }
 
-static int32_t rc_test5(void) { // fuzzing corrupted stream
-    rc_enter("Lorem ipsum");
-    static const char text[] =
-        "Lorem ipsum dolor sit amet, consectetur adipiscing elit, "
-        "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua. "
-        "Ut enim ad minim veniam, quis nostrud exercitation ullamco laboris "
-        "nisi ut aliquip ex ea commodo consequat. Duis aute irure dolor in "
-        "reprehenderit in voluptate velit esse cillum dolore eu fugiat nulla "
-        "pariatur. Excepteur sint occaecat cupidatat non proident, sunt in "
-        "culpa qui officia deserunt mollit anim id est laborum.";
-    enum { bits = 8 };
-    enum { symbols = 1 << bits };
-    enum { n = countof(text) - 1 }; // last byte text[countof(text)] == 0
-    io_alloc(rc, n * 2 + 8);
-    const uint8_t* in = (const uint8_t*)text;
-    uint64_t ecs = encode(in, n, symbols);
-    if (rc_verbose) { rc_stats(n, io.written, bits); }
-    uint8_t out[n];
-    size_t k = decode(out, n, symbols, -1);
-    swear(rc->error == 0 && k == n && ecs == io.checksum);
-    io_free();
-    rc_exit();
-    return 0;
-}
-
 static int32_t rc_test9(void) { // huge 1GB test
     int32_t r = 0;
     #ifndef DEBUG // only in release mode, too slow for debug
@@ -428,12 +533,12 @@ static int32_t rc_test9(void) { // huge 1GB test
     // On Windows x86 malloc( > 1GB) fails
     const size_t n = (sizeof(size_t) == 8 ? 1024 : 512) * (1024 * 1024);
     io_alloc(rc, n * 2 + 8);
-    uint8_t* in = (uint8_t*)allocate(n);
+    uint8_t* in = allocate(n);
     for (size_t i = 0; i < n; i++) { in[i] = (uint8_t)(i % symbols); }
     shuffle(in, n);
     uint64_t ecs = encode(in, n, symbols);
     if (rc_verbose) { rc_stats(n, io.written, bits); }
-    uint8_t* out = (uint8_t*)allocate(n);
+    uint8_t* out = allocate(n);
     size_t k = decode(out, n, symbols, -1);
     swear(rc->error == 0 && k == n && ecs == io.checksum);
     r = rc_cmp(in, out, n, ecs);
@@ -453,7 +558,7 @@ static int32_t rc_tests(int iterations, bool verbose, bool randomize) {
     for (int i = 0; i < iterations && r == 0; i++) {
         r = rc_test0() || rc_test1() || rc_test2() ||
             rc_test3() || rc_test4() || rc_test5() ||
-            rc_test9();
+            rc_test8() || rc_test9();
     }
     return r;
 }
