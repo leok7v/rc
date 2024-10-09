@@ -218,11 +218,8 @@ static int32_t rc_cmp(uint8_t in[], uint8_t out[], size_t n, uint64_t ecs) {
     return equal && ecs == io.checksum ? 0 : rc_err_data;
 }
 
-static struct range_coder  coder;
-static struct range_coder* rc = &coder;
-
-static struct prob_model  model;
-static struct prob_model* pm = &model;
+static struct range_coder* rc;
+static struct prob_model*  pm;
 
 static uint64_t encode(const uint8_t a[], size_t n, uint32_t symbols) {
     pm_init(pm, symbols);
@@ -253,7 +250,7 @@ static int32_t rc_test0(void) {
     enum { n = 2 };       // number of input symbols including EOM
     io_alloc(rc, n * 2 + 8);
     uint8_t in[n];
-    for (int32_t i = 0; i < n; i++) { in[i]  = (uint8_t)i; }
+    for (size_t i = 0; i < n; i++) { in[i]  = (uint8_t)i; }
     uint64_t ecs = encode(in, n, symbols); // encoder check sum
     uint8_t out[n];
     size_t k = decode(out, n, symbols, EOM);
@@ -270,7 +267,7 @@ static int32_t rc_test1(void) {
     enum { n = 1024 + 1 };
     io_alloc(rc, n * 2 + 8);
     static uint8_t in[n];
-    for (int32_t i = 0; i < n - 1; i++) {
+    for (size_t i = 0; i < n - 1; i++) {
         in[i]  = i % (symbols - 1);
     }
     in[n - 1] = symbols - 1; // EOM
@@ -307,7 +304,7 @@ static int32_t rc_test2(void) {
     io_alloc(rc, n * 2 + 8);
     // lucas[0] + lucas[0] + ... + lucas[31] = 7,881,195
     uint64_t lucas[symbols] = { 2, 1 };
-    for (int32_t i = 2; i < countof(lucas); i++) {
+    for (size_t i = 2; i < countof(lucas); i++) {
         lucas[i] = lucas[i - 1] + lucas[i - 2];
     }
     uint8_t* in = allocate(n);
@@ -318,9 +315,9 @@ static int32_t rc_test2(void) {
     size_t k = decode(out, n, symbols, -1); // no EOM
     swear(rc->error == 0 && k == n && ecs == io.checksum);
     int32_t r = rc_cmp(in, out, n, ecs);
-    io_free();
     free(out);
     free(in);
+    io_free();
     rc_exit();
     return r;
 }
@@ -333,7 +330,7 @@ static int32_t rc_test3(void) {
     enum { n = 1024 * 1024 };
     io_alloc(rc, n * 2 + 8);
     uint64_t zips[symbols];
-    for (int32_t i = 0; i < countof(zips); i++) { zips[i] = i + 1; }
+    for (size_t i = 0; i < countof(zips); i++) { zips[i] = i + 1; }
     uint8_t* in = allocate(n);
     rc_fill(in, n, zips, countof(zips), symbols);
     uint64_t ecs = encode(in, n, symbols);
@@ -342,9 +339,9 @@ static int32_t rc_test3(void) {
     size_t k = decode(out, n, symbols, -1);
     swear(rc->error == 0 && k == n && ecs == io.checksum);
     int32_t r = rc_cmp(in, out, n, ecs);
-    io_free();
     free(out);
     free(in);
+    io_free();
     rc_exit();
     return r;
 }
@@ -375,6 +372,34 @@ static int32_t rc_test4(void) {
 }
 
 static int32_t rc_test5(void) {
+    rc_enter("Long zeros");
+    enum { bits = 2 };
+    enum { symbols = 1 << bits };
+    enum { eom = symbols - 1 };
+    enum { n = 1024 * 1024 };
+    io_alloc(rc, n * 2 + 8);
+    uint8_t* in = allocate(n);
+    memset(in, 0, n - 1);
+    for (size_t i = 1; i < n; i += 1024) {
+        in[i] = (uint8_t)(rand64(&seed) * (symbols - 1));
+    }
+    for (size_t i = 1; i <= eom; i++) {
+        in[n - 1 - (eom - i)] = (uint8_t)i;
+    }
+    assert(in[n - 1] == eom);
+    uint64_t ecs = encode(in, n, symbols);
+    if (rc_verbose) { rc_stats(n, io.written, bits); }
+    uint8_t* out = allocate(n);
+    size_t k = decode(out, n, symbols, eom);
+    swear(rc->error == 0 && k == n && ecs == io.checksum);
+    free(out);
+    free(in);
+    io_free();
+    rc_exit();
+    return 0;
+}
+
+static int32_t rc_test6(void) {
     rc_enter("Multi stream");
     enum { bits = 8 };
     enum { symbols = 1 << bits };
@@ -401,15 +426,15 @@ static int32_t rc_test5(void) {
                                       &model_dist[2], &model_dist[3] };
     // encoder:
     pm_init(pm_text, symbols);
-    for (int j = 0; j < 2; j++) { pm_init(pm_size[j], symbols); }
-    for (int j = 0; j < 4; j++) { pm_init(pm_dist[j], symbols); }
+    for (size_t j = 0; j < 2; j++) { pm_init(pm_size[j], symbols); }
+    for (size_t j = 0; j < 4; j++) { pm_init(pm_dist[j], symbols); }
     rc_init(rc, 0);
     for (size_t i = 0; i < n; i++) {
         rc_encode(rc, pm_text, in_text[i]);
-        for (int j = 0; j < 2; j++) {
+        for (size_t j = 0; j < 2; j++) {
             rc_encode(rc, pm_size[j], (uint8_t)(in_size[i] >> (j * 8)));
         }
-        for (int j = 0; j < 4; j++) {
+        for (size_t j = 0; j < 4; j++) {
             rc_encode(rc, pm_dist[j], (uint8_t)(in_dist[i] >> (j * 8)));
         }
     }
@@ -441,8 +466,8 @@ static int32_t rc_test5(void) {
     }
     // decoder:
     pm_init(pm_text, symbols);
-    for (int j = 0; j < 2; j++) { pm_init(pm_size[j], symbols); }
-    for (int j = 0; j < 4; j++) { pm_init(pm_dist[j], symbols); }
+    for (size_t j = 0; j < 2; j++) { pm_init(pm_size[j], symbols); }
+    for (size_t j = 0; j < 4; j++) { pm_init(pm_dist[j], symbols); }
     io_rewind();
     rc->code = 0;
     for (size_t i = 0; i < sizeof(rc->code); i++) {
@@ -455,11 +480,11 @@ static int32_t rc_test5(void) {
     for (size_t i = 0; i < n; i++) {
         out_text[i] = rc_decode(rc, pm_text);
         out_size[i] = 0;
-        for (int j = 0; j < 2; j++) {
+        for (size_t j = 0; j < 2; j++) {
             out_size[i] |= rc_decode(rc, pm_size[j]) << (j * 8);
         }
         out_dist[i] = 0;
-        for (int j = 0; j < 4; j++) {
+        for (size_t j = 0; j < 4; j++) {
             out_dist[i] |= rc_decode(rc, pm_dist[j]) << (j * 8);
         }
     }
@@ -471,18 +496,18 @@ static int32_t rc_test5(void) {
     if (memcmp(in_dist, out_dist, n * sizeof(uint32_t)) != 0) {
         r = rc_err_invalid;
     }
-    io_free();
     free(out_dist);
     free(out_size);
     free(out_text);
     free(in_dist);
     free(in_size);
     free(in_text);
+    io_free();
     rc_exit();
     return r;
 }
 
-static int32_t rc_test8(void) { // fuzzing: corrupted stream
+static int32_t rc_test7(void) { // fuzzing: corrupted stream
     // https://en.wikipedia.org/wiki/Fuzzing
     rc_enter("Fuzzing");
     enum { symbols = 256 };
@@ -494,7 +519,7 @@ static int32_t rc_test8(void) { // fuzzing: corrupted stream
     }
     uint64_t ecs = encode(in, n, symbols);
     uint8_t out[n];
-    for (int32_t i = 0; i < 1024; i++) {
+    for (size_t i = 0; i < 9999; i++) {
         int32_t ix  = (int32_t)(io.written * rand64(&seed));
         uint8_t bad = (uint8_t)(rand64(&seed) * symbols);
         if ((io.data[ix] ^ bad) != io.data[ix]) {
@@ -524,7 +549,7 @@ static int32_t rc_test8(void) { // fuzzing: corrupted stream
     return 0;
 }
 
-static int32_t rc_test9(void) { // huge 1GB test
+static int32_t rc_test8(void) { // huge 1GB test
     int32_t r = 0;
     #ifndef DEBUG // only in release mode, too slow for debug
     rc_enter("Huge");
@@ -542,8 +567,8 @@ static int32_t rc_test9(void) { // huge 1GB test
     size_t k = decode(out, n, symbols, -1);
     swear(rc->error == 0 && k == n && ecs == io.checksum);
     r = rc_cmp(in, out, n, ecs);
-    free(in);
     free(out);
+    free(in);
     io_free();
     rc_exit();
     #endif
@@ -554,12 +579,20 @@ static int32_t rc_tests(int iterations, bool verbose, bool randomize) {
     swear(iterations > 0);
     if (randomize) { seed = nanoseconds() | 1; }
     rc_verbose = verbose;
+    // if the tests fail it is useful to know the starting seed value to debug
+    printf("seed: 0x%016llX\n", seed); // even in non verbose mode
+    // globally used range coder and probability model (except multi stream test)
+    rc = allocate(sizeof(struct range_coder));
+    pm = allocate(sizeof(struct prob_model));
     int32_t r = 0;
     for (int i = 0; i < iterations && r == 0; i++) {
         r = rc_test0() || rc_test1() || rc_test2() ||
             rc_test3() || rc_test4() || rc_test5() ||
-            rc_test8() || rc_test9();
+            rc_test6() || rc_test7() || rc_test8();
     }
+    free(pm);
+    free(rc);
+    printf("rc_tests() %s\n", r == 0 ? "OK" : "FAIL");
     return r;
 }
 
