@@ -10,6 +10,9 @@ implementation of a Range Coding.
 
 [rc.h](rc.h)
 
+Also see Fenwick Tree implementation [ft.h](https://github.com/leok7v/ft/blob/main/ft.h) 
+in [https://github.com/leok7v/ft](https://github.com/leok7v/ft)
+
 ## License
 
 This code is licensed under the BSD 3-Clause License. 

@@ -7,11 +7,26 @@
 #include "rc_test.h"
 #include <string.h>
 
+// --verbose --randomize --iterations 2
+// -i 99 -v -r
+
 int main(int argc, const char* argv[]) {
-    bool verbose = false;
-    for (int i = 1; i < argc && !verbose; i++) {
-        verbose = strcmp(argv[i], "-v") == 0 ||
-                  strcmp(argv[i], "--verbose") == 0;
+    int iterations = 1;
+    bool verbose   = false;
+    bool randomize = false;
+    for (int i = 1; i < argc; i++) {
+        verbose   |= strcmp(argv[i], "-v") == 0 ||
+                     strcmp(argv[i], "--verbose") == 0;
+        randomize |= strcmp(argv[i], "-r") == 0 ||
+                     strcmp(argv[i], "--randomize") == 0;
+        if (i < argc - 1 && strcmp(argv[i], "-i") == 0 ||
+            strcmp(argv[i], "--iterations") == 0) {
+            char* e = null;
+            long it = strtol(argv[i + 1], &e, 10);
+            if (it > 0 && e > argv[i + 1]) {
+                iterations = (int)it;
+            }
+        }
     }
-    return rc_tests(verbose);
+    return rc_tests(iterations, verbose, randomize);
 }
