@@ -5,6 +5,8 @@ VisualStudioVersion = 17.11.35222.181
 MinimumVisualStudioVersion = 10.0.40219.1
 Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "rc", "rc.vcxproj", "{AC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}"
 EndProject
+Project("{8BC9CEB8-8B4A-11D0-8D11-00A0C91BC942}") = "range_coder", "range_coder.vcxproj", "{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|ARM64 = Debug|ARM64
@@ -27,6 +29,18 @@ Global
 		{AC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x64.Build.0 = Release|x64
 		{AC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x86.ActiveCfg = Release|Win32
 		{AC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x86.Build.0 = Release|Win32
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Debug|ARM64.ActiveCfg = Debug|ARM64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Debug|ARM64.Build.0 = Debug|ARM64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Debug|x64.ActiveCfg = Debug|x64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Debug|x64.Build.0 = Debug|x64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Debug|x86.ActiveCfg = Debug|Win32
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Debug|x86.Build.0 = Debug|Win32
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|ARM64.ActiveCfg = Release|ARM64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|ARM64.Build.0 = Release|ARM64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x64.ActiveCfg = Release|x64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x64.Build.0 = Release|x64
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x86.ActiveCfg = Release|Win32
+		{FC13A9DB-5D6B-4098-B095-DEBB1FC8AE4C}.Release|x86.Build.0 = Release|Win32
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

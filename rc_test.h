@@ -200,7 +200,8 @@ static void io_free(void) {
             ((uint64_t)n * bits / 8), (uint64_t)written, percent, bps, e);  \
 } while (0)
 
-static int32_t rc_cmp(uint8_t in[], uint8_t out[], size_t n, uint64_t ecs) {
+static int32_t rc_cmp(const uint8_t in[], const uint8_t out[],
+                      size_t n, uint64_t ecs) {
     bool equal = ecs == io.checksum;
     if (!equal) {
         printf("checksum encoder: %016llX != decoder: %016llX\n",
@@ -367,8 +368,9 @@ static int32_t rc_test4(void) {
     size_t k = decode(out, n, symbols, -1);
     swear(rc->error == 0 && k == n && ecs == io.checksum);
     io_free();
+    int32_t r = rc_cmp(in, out, n, ecs);
     rc_exit();
-    return 0;
+    return r;
 }
 
 static int32_t rc_test5(void) {
@@ -392,11 +394,12 @@ static int32_t rc_test5(void) {
     uint8_t* out = allocate(n);
     size_t k = decode(out, n, symbols, eom);
     swear(rc->error == 0 && k == n && ecs == io.checksum);
+    int32_t r = rc_cmp(in, out, n, ecs);
     free(out);
     free(in);
     io_free();
     rc_exit();
-    return 0;
+    return r;
 }
 
 static int32_t rc_test6(void) {
@@ -490,6 +493,7 @@ static int32_t rc_test6(void) {
     }
     swear(rc->error == 0 && ecs == io.checksum);
     int32_t r = rc_cmp(in_text, out_text, n, ecs);
+    swear(r == 0);
     if (memcmp(in_size, out_size, n * sizeof(uint16_t)) != 0) {
         r = rc_err_invalid;
     }

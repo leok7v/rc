@@ -5,10 +5,16 @@
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="rc.h" />
-    <ClInclude Include="unstd.h" />
-    <ClInclude Include="rt.h" />
-    <ClInclude Include="rt_generics.h" />
     <ClInclude Include="rc_test.h" />
+    <ClInclude Include="rt.h">
+      <Filter>rt</Filter>
+    </ClInclude>
+    <ClInclude Include="rt_generics.h">
+      <Filter>rt</Filter>
+    </ClInclude>
+    <ClInclude Include="unstd.h">
+      <Filter>rt</Filter>
+    </ClInclude>
   </ItemGroup>
   <ItemGroup>
     <None Include="LICENSE">
@@ -24,6 +30,9 @@
   <ItemGroup>
     <Filter Include="misc">
       <UniqueIdentifier>{52d4371b-2cae-404d-a2cd-4c5dc22f7d1c}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="rt">
+      <UniqueIdentifier>{4424cdcd-d9ca-4d1f-9c55-d43e314eb345}</UniqueIdentifier>
     </Filter>
   </ItemGroup>
 </Project>
