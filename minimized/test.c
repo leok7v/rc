@@ -150,7 +150,7 @@ int main(void) {
     uint8_t out[n];
     size_t k = decode(pm, rc, out, n, symbols);
     assert(rc->error == 0 && k == n && ecs == io.checksum);
-    int32_t r = compare(in, out, n, ecs);
+    int32_t r = k == n ? compare(in, out, n, ecs) : rc_err_invalid;
     printf("decode(): %s\n", r == 0 ? "ok" : "failed");
     assert(r == 0);
     return r;

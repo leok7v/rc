@@ -367,8 +367,8 @@ static int32_t rc_test4(void) {
     uint8_t out[n];
     size_t k = decode(out, n, symbols, -1);
     swear(rc->error == 0 && k == n && ecs == io.checksum);
-    io_free();
     int32_t r = rc_cmp(in, out, n, ecs);
+    io_free();
     rc_exit();
     return r;
 }
